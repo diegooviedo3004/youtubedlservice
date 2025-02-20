@@ -1,51 +1,81 @@
-from flask import Flask, request, send_file, jsonify
-from flask_httpauth import HTTPBasicAuth
-import subprocess
+# app.py
 import os
-import uuid
+import re
+import subprocess
+import tempfile
+from flask import Flask, request, send_file, jsonify, abort
 
 app = Flask(__name__)
-auth = HTTPBasicAuth()
 
-# Hardcoded users (for learning purposes, consider using a secure method in production)
-users = {"admin": "password"}
+# Configuration
+API_KEY = os.environ.get('API_KEY', 'default-secure-key')
+MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
+YOUTUBE_REGEX = re.compile(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/')
 
-@auth.verify_password
-def verify_password(username, password):
-    if username in users and users[username] == password:
-        return username
-    return None
+def require_api_key(view):
+    def wrapped(*args, **kwargs):
+        if request.headers.get('X-API-KEY') == API_KEY:
+            return view(*args, **kwargs)
+        abort(401)
+    return wrapped
 
 @app.route('/download', methods=['POST'])
-@auth.login_required
+@require_api_key
 def download():
+    # Validate content length
+    if request.content_length > MAX_CONTENT_LENGTH:
+        abort(413)
+
     data = request.get_json()
-    url = data.get("url")
-    
-    if not url:
-        return jsonify({"error": "Missing URL parameter"}), 400
-    
-    filename = f"{uuid.uuid4()}.mp3"
-    output_path = os.path.join("downloads", filename)
-    
-    os.makedirs("downloads", exist_ok=True)
-    
-    command = [
-        "yt-dlp", "-x", "--audio-format", "mp3", "--output", output_path, url
-    ]
-    
+    url = data.get('url')
+
+    if not url or not YOUTUBE_REGEX.match(url):
+        return jsonify({'error': 'Invalid YouTube URL'}), 400
+
     try:
-        result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        output_log = f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
-        with open("logs.txt", "a") as log_file:
-            log_file.write(output_log + "\n")
-    except subprocess.CalledProcessError as e:
-        error_log = f"Error running yt-dlp:\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
-        with open("logs.txt", "a") as log_file:
-            log_file.write(error_log + "\n")
-        return jsonify({"error": "Failed to download or convert video", "details": e.stderr}), 500
-    
-    return send_file(output_path, as_attachment=True, mimetype="audio/mpeg")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_template = os.path.join(tmp_dir, '%(title)s.%(ext)s')
+            cmd = [
+                'yt-dlp',
+                '-x',
+                '--audio-format', 'mp3',
+                '--audio-quality', '0',
+                '--output', output_template,
+                url
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                app.logger.error(f"yt-dlp error: {result.stderr}")
+                return jsonify({'error': 'Failed to process video'}), 500
+
+            files = os.listdir(tmp_dir)
+            if not files:
+                return jsonify({'error': 'No file created'}), 500
+
+            mp3_path = os.path.join(tmp_dir, files[0])
+            return send_file(
+                mp3_path,
+                mimetype='audio/mpeg',
+                as_attachment=True,
+                download_name=os.path.basename(mp3_path)
+            )
+
+    except subprocess.TimeoutExpired:
+        app.logger.error("Download timed out")
+        return jsonify({'error': 'Processing timeout'}), 504
+    except Exception as e:
+        app.logger.error(f"Unexpected error: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+if __name__ != '__main__':
+    app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
