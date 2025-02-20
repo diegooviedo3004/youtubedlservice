@@ -1,21 +1,35 @@
-# Use an official Python runtime as a base image
-FROM python:3.9-slim
+# Dockerfile
+# Build stage
+FROM python:3.11-slim as builder
 
-# Set the working directory
 WORKDIR /app
 
-# Install dependencies
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir flask flask-httpauth yt-dlp
+RUN apt-get update && apt-get install -y \
+    gcc \
+    python3-dev \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy application files
-COPY . /app
+COPY requirements.txt .
+RUN pip install --user -r requirements.txt
 
-# Create a directory for downloads
-RUN mkdir -p /app/downloads
+# Runtime stage
+FROM python:3.11-slim
 
-# Expose the application port
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /root/.local /root/.local
+COPY . .
+
+ENV PATH=/root/.local/bin:$PATH
+ENV FLASK_APP=app.py
+ENV API_KEY=your-secure-api-key-here
+
 EXPOSE 5000
 
-# Run the Flask application
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "app:app"]
