@@ -18,7 +18,6 @@ def verify_password(username, password):
 
 @app.route('/download', methods=['POST'])
 @auth.login_required
-
 def download():
     data = request.get_json()
     url = data.get("url")
@@ -36,11 +35,13 @@ def download():
     ]
     
     try:
-        subprocess.run(command, check=True)
-    except subprocess.CalledProcessError:
+        result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(result.stdout.decode(), result.stderr.decode())  # Log output for debugging
+    except subprocess.CalledProcessError as e:
+        print(e.stderr.decode())  # Log specific error
         return jsonify({"error": "Failed to download or convert video"}), 500
     
-    return send_file(output_path, as_attachment=True)
+    return send_file(output_path, as_attachment=True, mimetype="audio/mpeg")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
