@@ -35,11 +35,15 @@ def download():
     ]
     
     try:
-        result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(result.stdout.decode(), result.stderr.decode())  # Log output for debugging
+        result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        output_log = f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+        with open("logs.txt", "a") as log_file:
+            log_file.write(output_log + "\n")
     except subprocess.CalledProcessError as e:
-        print(e.stderr.decode())  # Log specific error
-        return jsonify({"error": "Failed to download or convert video"}), 500
+        error_log = f"Error running yt-dlp:\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
+        with open("logs.txt", "a") as log_file:
+            log_file.write(error_log + "\n")
+        return jsonify({"error": "Failed to download or convert video", "details": e.stderr}), 500
     
     return send_file(output_path, as_attachment=True, mimetype="audio/mpeg")
 
